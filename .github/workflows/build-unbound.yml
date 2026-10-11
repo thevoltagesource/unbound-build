@@ -175,7 +175,9 @@ jobs:
 
           for arch in amd64 arm64; do
             echo "== $arch: version and linked libraries"
-            docker run --rm --platform "linux/$arch" "unbound:test-$arch" unbound -V | tee /tmp/v
+            docker run --rm --platform "linux/$arch" "unbound:test-$arch" unbound -V > /tmp/v 2>&1 \
+              || { cat /tmp/v; fail "$arch: unbound -V failed"; }
+            cat /tmp/v
             grep -q "Version ${VERSION}" /tmp/v || fail "$arch image reports the wrong version"
             echo "== $arch: generated default config is valid"
             docker run --rm --platform "linux/$arch" --entrypoint bash "unbound:test-$arch" \
@@ -184,7 +186,8 @@ jobs:
           done
 
           # Full run on amd64 with a config shaped like the real deployments.
-          docker run -d --name ub -v "$PWD/test/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro" unbound:test-amd64
+          docker run -d --name ub -v "$PWD/test/unbound.conf:/opt/unbound/etc/unbound/unbound.conf:ro" unbound:test-amd64 \
+            || fail "test container did not start"
           for _ in $(seq 1 30); do
             docker exec ub drill @127.0.0.1 localhost > /dev/null 2>&1 && break
             sleep 1
@@ -192,20 +195,25 @@ jobs:
           docker exec ub drill @127.0.0.1 localhost > /dev/null || fail "not answering on 127.0.0.1:53"
 
           echo "== recursive lookup with DNSSEC validation (expect the ad flag)"
-          docker exec ub drill -D @127.0.0.1 nlnetlabs.nl A | tee /tmp/ok
+          docker exec ub drill -D @127.0.0.1 nlnetlabs.nl A > /tmp/ok 2>&1 || true
+          cat /tmp/ok
           grep -qE 'flags:.* ad' /tmp/ok || fail "nlnetlabs.nl did not validate"
 
           echo "== deliberately broken DNSSEC (expect SERVFAIL)"
-          docker exec ub drill @127.0.0.1 dnssec-failed.org A | tee /tmp/bad || true
+          docker exec ub drill @127.0.0.1 dnssec-failed.org A > /tmp/bad 2>&1 || true
+          cat /tmp/bad
           grep -q 'rcode: SERVFAIL' /tmp/bad || fail "dnssec-failed.org was not rejected - validation is off"
 
           echo "== process dropped to _unbound"
           # No ps in the image; read /proc instead. stat resolves the name from the container's passwd.
-          RUNAS=$(docker exec ub sh -c 'for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = unbound ] && stat -c %U $p; done')
+          # The trailing "true" matters: without it the loop's last test (on the sh process itself)
+          # is false, sh exits 1, and set -e kills the step with no message (first run, 2026-10-11).
+          RUNAS=$(docker exec ub sh -c 'for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = unbound ] && stat -c %U $p; done; true') \
+            || fail "could not inspect processes in the test container"
           echo "unbound runs as: ${RUNAS}"
           [ "$RUNAS" = "_unbound" ] || fail "unbound is not running as _unbound"
 
-          docker rm -f ub > /dev/null
+          docker rm -f ub > /dev/null || true
           echo "Smoke test passed."
 
       - name: Push multi-arch image
