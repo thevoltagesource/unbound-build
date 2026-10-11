@@ -1,0 +1,9 @@
+# Weekly PRs when an action used by the workflow has a new major/minor version, so the
+# build doesn't drift into deprecation warnings (the yubihsm-connector build hit Node 20's).
+# PRs run the full build + smoke test without pushing.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
